@@ -1,0 +1,108 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Oct 16 06:06:49 2021
+
+@author: user
+"""
+
+import pandas as pd
+import numpy as np
+from sklearn.metrics.pairwise import pairwise_distances, cosine_similarity
+
+
+def get_rd8():
+    rd6 = pd.read_csv('C:\\Users\\user\\Desktop\\rd6.csv', header = 0)
+    rd8 = rd6.iloc[:, [1,2,3,4,7,8,9]].copy()
+    rd8 = rd8[~rd8['CustomerID'].isin(list(range(99990, 99999)))] #352712
+    rd8['Description'] = rd8['Description'].str.strip()
+    rd8['CustomerID'] = rd8['CustomerID'].astype(str)
+    rd8['date'] = pd.to_datetime(rd8['date']).dt.date
+    return rd8
+
+#rd8 = get_rd8()
+
+
+def get_user_item(rd8):
+    user_item = rd8.pivot_table(index = 'CustomerID', columns = 'Description', values = 'InvoiceNo', aggfunc = 'count')
+    user_item = user_item.fillna(0)
+    return user_item
+
+#user_item = get_user_item(rd8)
+
+
+def set_user(user_item, u):
+    user_log = list(user_item.loc[str(u), :][user_item.loc[str(u), :] >= 1].index)
+    return user_log
+
+#user_log = set_user(user_item, u)
+
+
+def get_user_similar(user_item):
+    user_cor = 1 - pairwise_distances(user_item.values, metric = 'jaccard')
+    for i in range(len(user_cor)):
+        user_cor[i, i] = 0
+    user_cor = pd.DataFrame(user_cor, index = user_item.index, columns = user_item.index)
+    return user_cor
+
+#user_cor = get_user_similar(user_item)
+
+
+def user_base_recommend(user_item, user_cor, user_log):
+    user_cf = np.dot(user_cor, user_item.values)
+    user_cf = pd.DataFrame(user_cf, index = user_item.index, columns = user_item.columns)
+    u_user_cf = user_cf.loc[str(u), :].sort_values(ascending = False)
+    for i in u_user_cf.index:
+        if i in user_log:
+            u_user_cf[i] = 0
+    u_user_recommend = u_user_cf[u_user_cf > 0]
+    u_user_recommend = list(u_user_recommend.head(6).index)
+    return u_user_recommend
+
+#u_user_recommend = user_base_recommend(user_item, user_cor, user_log)
+
+
+def get_item_similar(user_item):
+    item_cor = 1 - pairwise_distances(user_item.T.values, metric = 'jaccard')
+    for i in range(len(item_cor)):
+        item_cor[i, i] = 0
+    item_cor = pd.DataFrame(item_cor, index = user_item.columns, columns = user_item.columns)
+    return item_cor
+
+#item_cor = get_item_similar(user_item)
+
+
+def item_base_recommend(user_item, item_cor, user_log):
+    item_cf = np.dot(user_item.values, item_cor)
+    item_cf = pd.DataFrame(item_cf, index = user_item.index, columns = user_item.columns)
+    u_item_cf = item_cf.loc[str(u), :].sort_values(ascending = False)
+    for i in u_item_cf.index:
+        if i in user_log:
+            u_item_cf[i] = 0
+    u_item_recommend = u_item_cf[u_item_cf > 0]
+    u_item_recommend = list(u_item_recommend.head(6).index)
+    return u_item_recommend
+
+#u_item_recommend = item_base_recommend(user_item, item_cor, user_log)
+
+
+def main(u):
+    rd8 = get_rd8(); print('rd8 finished')
+    user_item = get_user_item(rd8); print('user_item finished')
+    user_log = set_user(user_item, u); print('user_log finished')
+    user_cor = get_user_similar(user_item); print('user_cor finished')
+    u_user_recommend = user_base_recommend(user_item, user_cor, user_log); print('u_user_recommend finished')
+    item_cor = get_item_similar(user_item); print('item_cor finished')
+    u_item_recommend = item_base_recommend(user_item, item_cor, user_log); print('u_item_recommend finished')
+    print('\n'+str(u)+' user_base recommend: \n'+str(list(u_user_recommend)))
+    print('\n'+str(u)+' item_base recommend: \n'+str(list(u_item_recommend)))
+    return rd8, user_item, user_cor, u_user_recommend, item_cor, u_item_recommend
+
+#rd8, user_item, user_cor, u_user_recommend, item_cor, u_item_recommend = main(u)
+
+
+#Key in CustomerID: 17841, 12433, 15344
+u = 17841
+
+if __name__ == '__main__':
+    rd8, user_item, user_cor, u_user_recommend, item_cor, u_item_recommend = main(u)
+
