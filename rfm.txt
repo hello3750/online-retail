@@ -1,0 +1,202 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Oct 13 21:29:23 2021
+
+@author: user
+"""
+
+import pandas as pd
+import datetime as dt
+from sklearn import preprocessing
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import matplotlib.pyplot as plt
+
+rd = pd.read_csv('C:\\Users\\user\\Desktop\\OnlineRetail.csv', header = 0)
+
+#drop duplicate
+def get_rd1(rd):
+    rd1 = rd.copy() #n = 541909
+    rd1['InvoiceDate'] = pd.to_datetime(rd1['InvoiceDate'])
+#    dup = rd1[rd1.duplicated() == 1] 
+#    dup561873 = rd1[rd1['InvoiceNo'] == '561873'] #InvoiceNo: 561873, 'StockCode': 84568, Quantity: 1440
+#    round(len(dup)/len(rd), 4) #5268, 0.97%
+    rd1.drop_duplicates(inplace = True) #n = 536641
+    rd1.reset_index(drop = True, inplace = True)
+    return rd1
+
+#rd1 = get_rd1(rd)
+
+
+#drop C --1
+def get_rd2(rd1):
+#    c17548 = rd1[rd1['CustomerID'] == 17548] #InvoiceNo: 550755 = C552049
+    rd2 = rd1.copy()
+    rd2['absQuantity'] = abs(rd2['Quantity'])
+    key = [tuple(x) for x in rd2.iloc[:, [6,1,5,8]].to_records(index = False)]
+    key = [str(x) for x in key]
+    key = pd.DataFrame(key, columns = ['key'])
+    rd2['key'] = key
+    return rd2
+
+#rd2 = get_rd2(rd1)
+
+
+#drop C --2
+def get_rd3(rd1, rd2):
+    C0 = rd2[rd2['InvoiceNo'].str.contains('C')] #n = 9251
+    C1 = rd2[~rd2['InvoiceNo'].str.contains('C')] #n = 527390
+    matchC = C0.merge(C1, how = 'left', left_on = 'key', right_on = 'key') #n = 11904
+    matchC = matchC[~matchC['InvoiceNo_y'].isnull()] #n = 5915
+    matchC = matchC[matchC['InvoiceDate_x'] >= matchC['InvoiceDate_y']] #n = 4223
+    matchC = matchC.sort_values(by = ['InvoiceNo_x', 'CustomerID_x', 'StockCode_x', 'Quantity_x', 'UnitPrice_x', 'InvoiceDate_y'])
+    matchC['rank'] = matchC.groupby(['InvoiceNo_x', 'CustomerID_x', 'StockCode_x', 'Quantity_x', 'UnitPrice_x'])['InvoiceDate_y'].rank(method = 'first', ascending = False)
+    uniC = list(matchC[matchC['rank'] == 1]['InvoiceNo_y'].unique())
+    rd3 = rd1[~rd1['InvoiceNo'].isin(uniC)] #n = 496633
+    rd3 = rd3[~rd3['InvoiceNo'].str.contains('C')] #n = 487382
+    return rd3
+
+#rd3 = get_rd3(rd1, rd2)
+
+
+#drop Quantity, UnitPrice
+def get_rd4(rd3):  
+    qless0 = rd3[(rd3['Quantity'] < 0)] #check, damage, throw away
+    round(len(qless0)/len(rd), 4) #1336, 0.25%
+    qeq0 = rd3[(rd3['Quantity'] == 0)]
+    round(len(qeq0)/len(rd), 4) #0, 0.00%
+    uless0 = rd3[(rd3['UnitPrice'] < 0)] #bad debt, found InvoiceNo contains 'A'
+    round(len(uless0)/len(rd), 4) #2, 0.00%
+    ueq0 = rd3[(rd3['UnitPrice'] == 0)] #free
+    round(len(ueq0)/len(rd), 4) #2503, 0.46%
+    rd4 = rd3[(rd3['Quantity'] > 0) & (rd3['UnitPrice'] > 0)]
+    rd4 = rd4[~rd4['InvoiceNo'].str.contains('A')] #n = 484876
+    return rd4
+
+#rd4 = get_rd4(rd3)
+
+
+#fill CustomerID
+def get_rd5(rd4):
+    cid0 = rd4[rd4['CustomerID'].isnull()] #132164
+    uni_country = list(cid0['Country'].unique())
+    rd5 = rd4.copy()
+    for i in range(0, len(uni_country)):
+        j = (rd5['CustomerID'].isnull()) & (rd5['Country'] == uni_country[i])
+        rd5.loc[j, 'CustomerID'] = rd5.loc[j, 'CustomerID'].fillna(99990+i)
+    rd5.reset_index(drop = True, inplace = True) #n = 484876
+    return rd5
+
+#rd5 = get_rd5(rd4)
+
+
+#data type
+def get_rd6(rd5):
+    rd6 = rd5.copy()
+    rd6['date'] = rd6['InvoiceDate'].dt.date
+    rd6['InvoicePrice'] = rd6['Quantity'] * rd6['UnitPrice']
+    rd6['InvoiceNo'] = rd6['InvoiceNo'].astype(int)
+    rd6['CustomerID'] = rd6['CustomerID'].astype(int).astype(str)
+    return rd6
+
+#rd6 = get_rd6(rd5)
+
+
+#prepare RFM data
+def get_data1(rd6):
+    rd7 = rd6[(rd6['date'] >= dt.date(2010, 12, 1)) & (rd6['date'] <= dt.date(2011, 11, 30))
+                & (rd6['Country'] == 'United Kingdom') & (rd6['CustomerID'] != '99990')] #299162
+    rd7.reset_index(drop = True, inplace = True)
+    max_date = rd7.groupby('CustomerID')['date'].max()
+    R = (dt.date(2011, 12, 1) - max_date).dt.days
+    F = rd7.groupby('CustomerID')['InvoiceNo'].nunique()
+    M = rd7.groupby('CustomerID')['InvoicePrice'].sum()
+    
+    data1 = pd.concat([max_date, R, F, M], axis = 1)
+    data1.columns = ['max_date', 'R', 'F', 'M']
+    data1.reset_index(drop = False, inplace = True)
+    data1['CustomerID'] = data1['CustomerID'].astype(str)
+    return data1
+
+#data1 = get_data1(rd6)
+
+
+#standardize
+def get_data2(data1):
+    data2 = preprocessing.MinMaxScaler().fit_transform(data1.iloc[:, 2:5])
+    data2 = pd.DataFrame(data2, columns = ['Rs', 'Fs', 'Ms'])
+    data2 = data1.merge(data2, how = 'left', left_index = True, right_index = True)
+    return data2
+
+#data2 = get_data2(data1)
+
+
+#silhouette
+def silhouette(data2):
+    X = data2.iloc[:, 5:9]
+    silhouette_avg = []
+    for i in range(2,10):
+        kmeans_fit = KMeans(n_clusters = i, random_state = 1).fit(X)
+        silhouette_avg.append(silhouette_score(X, kmeans_fit.labels_, metric = 'euclidean'))
+    
+    plt.plot(range(2,10), silhouette_avg, marker = 'o', label = 'Silhouette')
+    plt.legend() #顯示圖例
+    plt.ylim([0, 0.8])
+    plt.title('Silhouette Chart')
+    plt.xlabel('Group_Number')
+    return X
+
+#X = silhouette(data2)
+
+
+#cluster
+def get_data3(X, data2):
+    km3 = KMeans(n_clusters = 3, random_state = 1).fit(X)
+    km3 = pd.DataFrame(km3.labels_, columns = ['km3'])
+    freq3 = km3['km3'].value_counts()
+    data3 = data2.copy()
+    data3['clus'] = km3
+    return data3, freq3
+
+#data3, freq3 = get_data3(X, data2)
+
+
+def main(rd):
+    rd1 = get_rd1(rd); print('rd1 finished')
+    rd2 = get_rd2(rd1); print('rd2 finished')
+    rd3 = get_rd3(rd1, rd2); print('rd3 finished')
+    rd4 = get_rd4(rd3); print('rd4 finished')
+    rd5 = get_rd5(rd4); print('rd5 finished')
+    rd6 = get_rd6(rd5); print('rd6 finished')
+    data1 = get_data1(rd6); print('data1 finished')
+    data2 = get_data2(data1); print('data2 finished')
+    X = silhouette(data2); print('X finished')
+    data3, freq3 = get_data3(X, data2); print('data3 finished')
+    return rd6, data1, data3, freq3
+
+#rd6, data3, freq3 = main(rd)
+
+
+if __name__ == '__main__':
+    rd6, data1, data3, freq3 = main(rd)
+
+
+def rfm_summary():
+    a = data3.iloc[:, 2:5].describe().T
+    a = a.reset_index(drop = False).rename(columns = {'index': 'type'})
+    a['clus'] = 'all'
+    b = pd.DataFrame()
+    for i in ['R', 'F', 'M']:
+        t = data3.groupby('clus').agg({i: ['count', 'mean', 'std', 'min', lambda x: x.quantile(0.25), 'median', lambda x: x.quantile(0.75), 'max']})
+        t.reset_index(drop = False, inplace = True)
+        t.columns = ['clus', 'count', 'mean', 'std', 'min', '25%', '50%', '75%', 'max']
+        t['type'] = i
+        b = b.append(t)
+    summary = pd.concat([a, b], axis = 0, sort = False)
+    summary = summary.reindex(columns = ['type', 'clus', 'count', 'mean', 'std', 'min', '25%', '50%', '75%', 'max'])
+    summary = summary.sort_values(by = ['clus', 'type'])
+    summary.reset_index(drop = True, inplace = True)
+    return summary
+
+summary = rfm_summary()
+
